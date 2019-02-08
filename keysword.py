@@ -20,6 +20,7 @@ JAMF_HOST = getenv("JAMF_HOST")
 JAMF_USERNAME = getenv("JAMF_USERNAME")
 JAMF_PASSWORD = getenv("JAMF_PASSWORD")
 
+
 """
 getComputerID
 -------------
@@ -34,6 +35,7 @@ def getComputerID(name):
 
     # TODO: add error checking here
     return resp.json()["computer"]["general"]["id"]
+
 
 """
 getSessionToken
@@ -59,16 +61,31 @@ def getSessionToken(s, jar, id):
             return line.encode('utf-8').translate(None, '<>"').split('=')[-1]
     print "Unable to find session token"
 
+
+"""
+main
+-------------
+Connects to the JAMF JSS API and extracts a filevault key for the provided device ID
+  :param id string
+  :param name string
+"""
 def main(id, name):
+    """ Create the cookie jar and session for requests """
     jar = cookielib.CookieJar()
     s = requests.Session()
     s.cookies = jar
-
+    
+    """ Get the computer id if a hostname was provided """
     if len(name) > 0:
         id = getComputerID(name)
 
+    """ Get the session token """
     session_token = getSessionToken(s, jar, id)
+    if len(session_token) == 0:
+        print "Unable to find session token"
+        exit()
 
+    """ Make the request against the computers.ajax endpoint """
     data = "&ajaxAction=AJAX_ACTION_READ_FILE_VAULT_2_KEY&session-token={}".format(session_token)
     resp = s.post('{}/computers.ajax?id={}&o=r&v=management'.format(JAMF_HOST, id), data="{}".format(data), cookies=jar, headers={
         "X-Requested-With": "XMLHttpRequest",
@@ -89,6 +106,10 @@ def main(id, name):
         for n in e.getElementsByTagName("individualKey")[0].childNodes:
             if n.nodeType == n.TEXT_NODE:
                 print n.data
+                return
+
+    """ If we couldn't find the key, print """"
+    print "Unable to find filevault key"
 
 
 """ main """
