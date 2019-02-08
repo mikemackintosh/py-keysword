@@ -43,13 +43,13 @@ Gets a session token from the legacy pages to get access to the ajax API
   :param jar cookie jar
   :return token string
 """
-def getSessionToken(s, jar):
+def getSessionToken(s, jar, id):
     resp = s.post('{}/?failover'.format(JAMF_HOST), cookies=jar, data={'username':JAMF_USERNAME, 'password':JAMF_PASSWORD, 'resetUsername':''})
     if resp.status_code != 200:
         print "Looks like you failed to authenticate"
         exit(1)
 
-    params = {"id": 8133, "o": "r", "v": "management"}
+    params = {"id": id, "o": "r", "v": "management"}
     resp = s.get('{}/legacy/computers.html'.format(JAMF_HOST), params=params, cookies=jar)
     session_token = ""
 
@@ -67,7 +67,7 @@ def main(id, name):
     if len(name) > 0:
         id = getComputerID(name)
 
-    session_token = getSessionToken(s, jar)
+    session_token = getSessionToken(s, jar, id)
 
     data = "&ajaxAction=AJAX_ACTION_READ_FILE_VAULT_2_KEY&session-token={}".format(session_token)
     resp = s.post('{}/computers.ajax?id={}&o=r&v=management'.format(JAMF_HOST, id), data="{}".format(data), cookies=jar, headers={
