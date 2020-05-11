@@ -11,6 +11,7 @@ This module implements the Requests API.
 import requests
 import cookielib
 import argparse
+import re
 from os import getenv
 from xml.dom.minidom import parseString
 
@@ -43,6 +44,7 @@ getSessionToken
 Gets a session token from the legacy pages to get access to the ajax API
   :param s requests.Session
   :param jar cookie jar
+  :param id
   :return token string
 """
 def getSessionToken(s, jar, id):
@@ -51,7 +53,7 @@ def getSessionToken(s, jar, id):
         print "Looks like you failed to authenticate"
         exit(1)
 
-    params = {"id": id, "o": "r", "v": "management"}
+    params = {"id": id, "o": "r", "v": "inventory"}
     resp = s.get('{}/legacy/computers.html'.format(JAMF_HOST), params=params, cookies=jar)
     session_token = ""
 
@@ -61,6 +63,25 @@ def getSessionToken(s, jar, id):
             return line.encode('utf-8').translate(None, '<>"').split('=')[-1]
     print "Unable to find session token"
 
+
+"""
+getFilevaultKeyID
+-------------
+Gets the Filevault key ID stored on the legacy computers.html
+  :param s requests.Session
+  :param jar cookie jar
+  :param id
+  :return token string
+"""
+def getFilevaultKeyID(s, jar, id):
+    params = {"id": id, "o": "r", "v": "inventory"}
+    resp = s.get('{}/legacy/computers.html'.format(JAMF_HOST), params=params, cookies=jar)
+    
+    for line in resp.content.splitlines():
+        if "SHOW_KEY" in line:
+            return re.search('retrieveFV2Key&#x28;([0-9]+),', line).group(1)
+
+    return
 
 """
 main
@@ -85,9 +106,15 @@ def main(id, name):
         print "Unable to find session token"
         exit()
 
+    """  Get the Filevault key ID """
+    key_ID = getFilevaultKeyID(s, jar, id)
+    if len(key_ID) == 0:
+        print "Unable to find Filevault key ID"
+        exit()
+
     """ Make the request against the computers.ajax endpoint """
-    data = "&ajaxAction=AJAX_ACTION_READ_FILE_VAULT_2_KEY&session-token={}".format(session_token)
-    resp = s.post('{}/computers.ajax?id={}&o=r&v=management'.format(JAMF_HOST, id), data="{}".format(data), cookies=jar, headers={
+    data = "&fileVaultKeyId={}&fileVaultKeyType=individualKey&identifier=FIELD_FILEVAULT2_INDIVIDUAL_KEY&ajaxAction=AJAX_ACTION_READ_FILE_VAULT_2_KEY&session-token={}".format(key_ID, session_token)
+    resp = s.post('{}/computers.ajax?id={}&o=r'.format(JAMF_HOST, id), data="{}".format(data), cookies=jar, headers={
         "X-Requested-With": "XMLHttpRequest",
         "Origin": JAMF_HOST,
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -97,7 +124,7 @@ def main(id, name):
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.81 Safari/537.36",
-        "Referer": "{}/legacy/computers.html?id={}&o=r&v=management".format(JAMF_HOST, id)
+        "Referer": "{}/legacy/computers.html?id={}&o=r".format(JAMF_HOST, id)
         })
 
     # TODO: add error checking here
@@ -107,8 +134,7 @@ def main(id, name):
             if n.nodeType == n.TEXT_NODE:
                 print n.data
                 return
-
-    """ If we couldn't find the key, print """"
+                
     print "Unable to find filevault key"
 
 
