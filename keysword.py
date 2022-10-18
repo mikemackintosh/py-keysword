@@ -9,8 +9,9 @@ This module implements the Requests API.
 """
 
 import requests
-import cookielib
+from http.cookiejar import CookieJar
 import argparse
+import re
 from os import getenv
 from xml.dom.minidom import parseString
 
@@ -19,7 +20,6 @@ __VERSION__ = "1.0"
 JAMF_HOST = getenv("JAMF_HOST")
 JAMF_USERNAME = getenv("JAMF_USERNAME")
 JAMF_PASSWORD = getenv("JAMF_PASSWORD")
-
 
 """
 getComputerID
@@ -43,24 +43,47 @@ getSessionToken
 Gets a session token from the legacy pages to get access to the ajax API
   :param s requests.Session
   :param jar cookie jar
+  :param id
   :return token string
 """
 def getSessionToken(s, jar, id):
     resp = s.post('{}/?failover'.format(JAMF_HOST), cookies=jar, data={'username':JAMF_USERNAME, 'password':JAMF_PASSWORD, 'resetUsername':''})
     if resp.status_code != 200:
-        print "Looks like you failed to authenticate"
+        print("Look's like you failed to authenticate")
         exit(1)
 
-    params = {"id": id, "o": "r", "v": "management"}
+    params = {"id": id, "o": "r", "v": "inventory"}
     resp = s.get('{}/legacy/computers.html'.format(JAMF_HOST), params=params, cookies=jar)
+    if resp.status_code == 404:
+        print("No device for that ID")
+        exit()
     session_token = ""
 
     # TODO: add error checking here
     for line in resp.content.splitlines():
-        if "session-token" in line:
-            return line.encode('utf-8').translate(None, '<>"').split('=')[-1]
-    print "Unable to find session token"
+        linestr = str(line)
+        if "session-token" in linestr:
+            replaced = str(linestr.encode('utf-8')).replace('<', "").replace('>', "").replace('"', "").replace('\\', "").replace("'", "")
+            return replaced.split('=')[-1]
 
+
+"""
+getFilevaultKeyID
+-------------
+Gets the Filevault key ID stored on the legacy computers.html
+  :param s requests.Session
+  :param jar cookie jar
+  :param id
+  :return token string
+"""
+def getFilevaultKeyID(s, jar, id):
+    params = {"id": id, "o": "r", "v": "inventory"}
+    resp = s.get('{}/legacy/computers.html'.format(JAMF_HOST), params=params, cookies=jar)
+    for line in resp.content.splitlines():
+        if "SHOW_KEY" in str(line):
+            return re.search('retrieveFV2Key&#x28;([0-9]+),', str(line)).group(1)
+
+    return
 
 """
 main
@@ -71,23 +94,29 @@ Connects to the JAMF JSS API and extracts a filevault key for the provided devic
 """
 def main(id, name):
     """ Create the cookie jar and session for requests """
-    jar = cookielib.CookieJar()
+    jar = CookieJar()
     s = requests.Session()
     s.cookies = jar
-    
+
     """ Get the computer id if a hostname was provided """
     if len(name) > 0:
         id = getComputerID(name)
 
     """ Get the session token """
     session_token = getSessionToken(s, jar, id)
-    if len(session_token) == 0:
-        print "Unable to find session token"
+    if session_token is None or len(session_token) == 0:
+        print("Unable to find session token")
+        exit()
+
+    """  Get the Filevault key ID """
+    key_ID = getFilevaultKeyID(s, jar, id)
+    if key_ID is None or len(key_ID) == 0:
+        print("Unable to find Filevault key ID")
         exit()
 
     """ Make the request against the computers.ajax endpoint """
-    data = "&ajaxAction=AJAX_ACTION_READ_FILE_VAULT_2_KEY&session-token={}".format(session_token)
-    resp = s.post('{}/computers.ajax?id={}&o=r&v=management'.format(JAMF_HOST, id), data="{}".format(data), cookies=jar, headers={
+    data = "&fileVaultKeyId={}&fileVaultKeyType=individualKey&identifier=FIELD_FILEVAULT2_INDIVIDUAL_KEY&ajaxAction=AJAX_ACTION_READ_FILE_VAULT_2_KEY&session-token={}".format(key_ID, session_token)
+    resp = s.post('{}/computers.ajax?id={}&o=r'.format(JAMF_HOST, id), data="{}".format(data), cookies=jar, headers={
         "X-Requested-With": "XMLHttpRequest",
         "Origin": JAMF_HOST,
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -97,7 +126,7 @@ def main(id, name):
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.81 Safari/537.36",
-        "Referer": "{}/legacy/computers.html?id={}&o=r&v=management".format(JAMF_HOST, id)
+        "Referer": "{}/legacy/computers.html?id={}&o=r".format(JAMF_HOST, id)
         })
 
     # TODO: add error checking here
@@ -105,11 +134,9 @@ def main(id, name):
     if len(e.getElementsByTagName("individualKey")) > 0:
         for n in e.getElementsByTagName("individualKey")[0].childNodes:
             if n.nodeType == n.TEXT_NODE:
-                print n.data
+                print(n.data)
                 return
-
-    """ If we couldn't find the key, print """"
-    print "Unable to find filevault key"
+    print("Unable to find filevault key")
 
 
 """ main """
@@ -124,17 +151,17 @@ if __name__ == "__main__":
 
     """ Quick validation of arguments """
     if len(results.id) == 0 and len(results.name) == 0:
-        print "Please provide a computer id with -id or computer name with -name"
+        print("Please provide a computer id with -id or computer name with -name")
         exit()
 
     elif len(results.id) != 0 and len(results.name) != 0:
-        print "Please provide only one computer id with -id or with -name, but not both"
+        print("Please provide only one computer id with -id or with -name, but not both")
         exit()
 
     if len(getenv("JAMF_USERNAME")) == 0 \
             or len(getenv("JAMF_USERNAME")) == 0 \
             or len(getenv("JAMF_HOST")) == 0:
-        print "Please set your environment variables appropriately"
+        print("Please set your environment variables appropriately")
         exit()
 
     """ run main """
